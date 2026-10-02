@@ -17,23 +17,33 @@ When presenting tutorials, coding sessions, webinars, or game streams in OBS Stu
 
 ---
 
-## 📸 Screenshots & Showcase
+## 📸 Step-by-Step Walkthrough
 
-<!-- Add your screenshots in the /screenshots folder and update the image paths below -->
+Below is a visual guide on how to configure and use FocusLens:
 
-<p align="center">
-  <img src="screenshots/screenshot1.png" alt="FocusLens OBS Configuration Dialog" width="750" />
-</p>
+### 1. Opening the Plugin
+<p align="center"><img src="screenshots/screenshot1.png" alt="Opening FocusLens" width="700" /></p>
+<p align="center"><em>Find FocusLens in the <b>Tools</b> menu of OBS Studio.</em></p>
 
-<p align="center"><em>FocusLens Settings in OBS Studio (Tools -> FocusLens...)</em></p>
+### 2. Configuring Triggers
+<p align="center"><img src="screenshots/screenshot2.png" alt="Trigger Settings" width="700" /></p>
+<p align="center"><em>Select your preferred hotkey or mouse button combination to activate the zoom.</em></p>
 
-<br/>
+### 3. Adjusting Zoom Behavior
+<p align="center"><img src="screenshots/screenshot3.png" alt="Zoom Behavior" width="700" /></p>
+<p align="center"><em>Set the zoom multiplier and choose between "Hold" or "Toggle" modes.</em></p>
 
-<p align="center">
-  <img src="screenshots/screenshot2.png" alt="FocusLens Zoom Active Indicator" width="750" />
-</p>
+### 4. Selecting Sources
+<p align="center"><img src="screenshots/screenshot4.png" alt="Source Selection" width="700" /></p>
+<p align="center"><em>Check the specific OBS sources (like Display Capture) you want to be magnified.</em></p>
 
-<p align="center"><em>Stealth Zoom Alert Badge (Visible only to you, invisible to your stream recording)</em></p>
+### 5. The OSD Alert Badge
+<p align="center"><img src="screenshots/screenshot5.png" alt="OSD Badge" width="700" /></p>
+<p align="center"><em>The stealth "ZOOM ACTIVE" indicator appears on your screen (invisible to viewers).</em></p>
+
+### 6. System Tray Companion
+<p align="center"><img src="screenshots/screenshot6.png" alt="System Tray Menu" width="700" /></p>
+<p align="center"><em>Right-click the FocusLens tray icon to manually Sync, enable/disable the alert, or Exit.</em></p>
 
 ---
 
