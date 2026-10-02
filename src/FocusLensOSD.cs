@@ -1,6 +1,7 @@
-﻿using System;
+using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
@@ -9,8 +10,8 @@ using Microsoft.Win32;
 [assembly: System.Reflection.AssemblyDescription("On-Screen Zoom & Focus Indicator for OBS Studio")]
 [assembly: System.Reflection.AssemblyCompany("Saiful Islam (saifulislam.net)")]
 [assembly: System.Reflection.AssemblyProduct("FocusLens")]
-[assembly: System.Reflection.AssemblyCopyright("Saiful Islam - saifulislam.net")]
-[assembly: System.Reflection.AssemblyVersion("2.1.0.0")]
+[assembly: System.Reflection.AssemblyCopyright("Copyright (c) Saiful Islam - saifulislam.net")]
+[assembly: System.Reflection.AssemblyVersion("2.2.0.0")]
 
 namespace FocusLensOSD
 {
@@ -25,64 +26,35 @@ namespace FocusLensOSD
                 if (!createdNew) return;
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new OverlayForm());
+                Application.Run(new FocusLensAppContext());
             }
         }
     }
 
-    public class OverlayForm : Form
+    public class FocusLensAppContext : ApplicationContext
     {
-        private bool isZoomed = false;
-        private bool isAlertEnabled = true;
-        private bool isObsActive = false;
-        private Label lblStatus;
+        private OverlayForm overlayForm;
         private NotifyIcon trayIcon;
         private MenuItem mnuAlertEnabled;
-        private System.Windows.Forms.Timer processCheckTimer;
+        private System.Windows.Forms.Timer pollTimer;
+        private FileSystemWatcher fileWatcher;
+        private System.Windows.Forms.Timer testPreviewTimer;
 
-        private const int WH_MOUSE_LL = 14;
-        private const int WM_LBUTTONDOWN = 0x0201;
-        private delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
-        private LowLevelMouseProc _proc;
-        private IntPtr _hookID = IntPtr.Zero;
+        private string configPath;
+        private string configDir;
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+        private bool isObsActive = false;
+        private bool isZoomed = false;
+        private bool isAlertEnabled = true;
 
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-        private static extern IntPtr GetModuleHandle(string lpModuleName);
-
-        [DllImport("user32.dll")]
-        private static extern short GetAsyncKeyState(int vKey);
-        private const int VK_CONTROL = 0x11;
-
-        [DllImport("user32.dll")]
-        private static extern uint SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
-        private const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
-
-        protected override CreateParams CreateParams
+        public FocusLensAppContext()
         {
-            get
-            {
-                CreateParams cp = base.CreateParams;
-                cp.ExStyle |= 0x80000; // WS_EX_LAYERED
-                cp.ExStyle |= 0x20;    // WS_EX_TRANSPARENT
-                cp.ExStyle |= 0x80;    // WS_EX_TOOLWINDOW
-                return cp;
-            }
-        }
+            // Resolve zoominator.json config path
+            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            configDir = Path.Combine(appData, @"obs-studio\plugin_config\zoominator");
+            configPath = Path.Combine(configDir, "zoominator.json");
 
-        public OverlayForm()
-        {
-            _proc = HookCallback;
-
+            // Read user preferences
             try
             {
                 object val = Registry.GetValue(@"HKEY_CURRENT_USER\Software\FocusLensOSD", "AlertEnabled", 1);
@@ -90,37 +62,13 @@ namespace FocusLensOSD
             }
             catch { }
 
-            this.FormBorderStyle = FormBorderStyle.None;
-            this.TopMost = true;
-            this.StartPosition = FormStartPosition.Manual;
-            this.BackColor = Color.Magenta;
-            this.TransparencyKey = Color.Magenta;
-            this.ShowInTaskbar = false;
-            
-            int badgeWidth = 110;
-            int badgeHeight = 22;
-            this.Size = new Size(badgeWidth, badgeHeight);
+            // Create Overlay Form (starts 100% hidden by default)
+            overlayForm = new OverlayForm();
+            overlayForm.Hide();
 
-            Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
-            int posX = (workingArea.Width - badgeWidth) / 2 + workingArea.Left;
-            int posY = workingArea.Bottom - badgeHeight - 37;
-            this.Location = new Point(posX, posY);
-
-            lblStatus = new Label();
-            lblStatus.Text = "🔍 ZOOM ACTIVE";
-            lblStatus.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
-            lblStatus.ForeColor = Color.White;
-            lblStatus.BackColor = Color.FromArgb(220, 20, 30);
-            lblStatus.AutoSize = false;
-            lblStatus.TextAlign = ContentAlignment.MiddleCenter;
-            lblStatus.Dock = DockStyle.Fill;
-            lblStatus.Visible = false;
-
-            this.Controls.Add(lblStatus);
-
+            // Create System Tray Icon
             trayIcon = new NotifyIcon();
             trayIcon.Text = "FocusLens Alert System (By Saiful Islam - saifulislam.net)";
-            
             try
             {
                 Bitmap bmp = new Bitmap(16, 16);
@@ -128,7 +76,7 @@ namespace FocusLensOSD
                 {
                     g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                     g.Clear(Color.Transparent);
-                    using (Brush b = new SolidBrush(Color.FromArgb(220, 20, 30)))
+                    using (Brush b = new SolidBrush(Color.FromArgb(220, 20, 40)))
                     {
                         g.FillEllipse(b, 1, 1, 14, 14);
                     }
@@ -149,6 +97,7 @@ namespace FocusLensOSD
             mnuAlertEnabled = new MenuItem("Alert Enabled (Show on Zoom)", OnToggleAlert);
             mnuAlertEnabled.Checked = isAlertEnabled;
             trayMenu.MenuItems.Add(mnuAlertEnabled);
+            trayMenu.MenuItems.Add("Test Alert (5s Preview)", OnTestPreview);
             trayMenu.MenuItems.Add("-");
             trayMenu.MenuItems.Add("Sync (Reset to OFF)", OnSync);
             trayMenu.MenuItems.Add("-");
@@ -159,41 +108,118 @@ namespace FocusLensOSD
             isObsActive = IsObsRunning();
             trayIcon.Visible = isObsActive;
 
-            if (isObsActive)
-            {
-                _hookID = SetHook(_proc);
-            }
+            // Setup FileSystemWatcher for instant 0ms state changes
+            SetupFileWatcher();
 
-            // Periodic timer to monitor OBS process
-            processCheckTimer = new System.Windows.Forms.Timer();
-            processCheckTimer.Interval = 1000;
-            processCheckTimer.Tick += ProcessCheckTimer_Tick;
-            processCheckTimer.Start();
+            // High frequency polling timer (50ms) to ensure 100% reliability
+            pollTimer = new System.Windows.Forms.Timer();
+            pollTimer.Interval = 50;
+            pollTimer.Tick += (s, e) => CheckState();
+            pollTimer.Start();
+
+            // Run initial check
+            CheckState();
         }
 
-        private void ProcessCheckTimer_Tick(object sender, EventArgs e)
+        private void SetupFileWatcher()
         {
-            bool obsRunning = IsObsRunning();
-            if (obsRunning && !isObsActive)
+            try
             {
-                isObsActive = true;
-                trayIcon.Visible = true;
-                if (_hookID == IntPtr.Zero)
+                if (Directory.Exists(configDir))
                 {
-                    _hookID = SetHook(_proc);
+                    fileWatcher = new FileSystemWatcher(configDir, "zoominator.json");
+                    fileWatcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime;
+                    fileWatcher.Changed += (s, e) => CheckState();
+                    fileWatcher.Created += (s, e) => CheckState();
+                    fileWatcher.EnableRaisingEvents = true;
                 }
             }
-            else if (!obsRunning && isObsActive)
+            catch { }
+        }
+
+        private void CheckState()
+        {
+            bool obsRunning = IsObsRunning();
+
+            if (obsRunning != isObsActive)
             {
-                isObsActive = false;
-                trayIcon.Visible = false;
-                if (_hookID != IntPtr.Zero)
+                isObsActive = obsRunning;
+                trayIcon.Visible = isObsActive;
+
+                if (isObsActive && fileWatcher == null)
                 {
-                    UnhookWindowsHookEx(_hookID);
-                    _hookID = IntPtr.Zero;
+                    SetupFileWatcher();
                 }
-                isZoomed = false;
-                UpdateOverlay();
+            }
+
+            if (!isObsActive)
+            {
+                if (isZoomed)
+                {
+                    isZoomed = false;
+                    SetAlertVisible(false);
+                }
+                return;
+            }
+
+            // If test preview is running, do not override
+            if (testPreviewTimer != null && testPreviewTimer.Enabled)
+            {
+                return;
+            }
+
+            // Real OBS zoom state from zoominator.json (recovery_active: true/false)
+            bool zoomedInObs = ReadZoomActiveFromConfig();
+            if (zoomedInObs != isZoomed)
+            {
+                isZoomed = zoomedInObs;
+                SetAlertVisible(isZoomed && isAlertEnabled && isObsActive);
+            }
+        }
+
+        private bool ReadZoomActiveFromConfig()
+        {
+            try
+            {
+                if (File.Exists(configPath))
+                {
+                    using (var fs = new FileStream(configPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                    using (var reader = new StreamReader(fs))
+                    {
+                        string text = reader.ReadToEnd();
+                        var match = System.Text.RegularExpressions.Regex.Match(text, @"""recovery_active""\s*:\s*(true|false)");
+                        if (match.Success)
+                        {
+                            return match.Groups[1].Value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                        }
+                    }
+                }
+            }
+            catch { }
+            return false;
+        }
+
+        private void SetAlertVisible(bool visible)
+        {
+            if (overlayForm.InvokeRequired)
+            {
+                overlayForm.Invoke(new Action(() => SetAlertVisible(visible)));
+                return;
+            }
+
+            if (visible)
+            {
+                if (!overlayForm.Visible)
+                {
+                    overlayForm.Show();
+                }
+            }
+            else
+            {
+                if (overlayForm.Visible)
+                {
+                    overlayForm.Hide();
+                }
             }
         }
 
@@ -202,16 +228,6 @@ namespace FocusLensOSD
             return Process.GetProcessesByName("obs64").Length > 0 ||
                    Process.GetProcessesByName("obs32").Length > 0 ||
                    Process.GetProcessesByName("obs").Length > 0;
-        }
-
-        protected override void OnHandleCreated(EventArgs e)
-        {
-            base.OnHandleCreated(e);
-            try
-            {
-                SetWindowDisplayAffinity(this.Handle, WDA_EXCLUDEFROMCAPTURE);
-            }
-            catch { }
         }
 
         private void OnToggleAlert(object sender, EventArgs e)
@@ -224,65 +240,119 @@ namespace FocusLensOSD
             }
             catch { }
 
-            UpdateOverlay();
+            SetAlertVisible(isZoomed && isAlertEnabled && isObsActive);
+        }
+
+        private void OnTestPreview(object sender, EventArgs e)
+        {
+            SetAlertVisible(true);
+
+            if (testPreviewTimer == null)
+            {
+                testPreviewTimer = new System.Windows.Forms.Timer();
+                testPreviewTimer.Interval = 5000;
+                testPreviewTimer.Tick += (s, ev) =>
+                {
+                    testPreviewTimer.Stop();
+                    CheckState();
+                };
+            }
+            testPreviewTimer.Stop();
+            testPreviewTimer.Start();
         }
 
         private void OnSync(object sender, EventArgs e)
         {
+            if (testPreviewTimer != null) testPreviewTimer.Stop();
             isZoomed = false;
-            UpdateOverlay();
+            SetAlertVisible(false);
+            CheckState();
         }
 
         private void OnExit(object sender, EventArgs e)
         {
+            if (pollTimer != null)
+            {
+                pollTimer.Stop();
+                pollTimer.Dispose();
+            }
+            if (fileWatcher != null)
+            {
+                fileWatcher.Dispose();
+            }
+            if (testPreviewTimer != null)
+            {
+                testPreviewTimer.Dispose();
+            }
             trayIcon.Visible = false;
+            overlayForm.Hide();
+            overlayForm.Dispose();
             Application.Exit();
         }
+    }
 
-        private IntPtr SetHook(LowLevelMouseProc proc)
+    public class OverlayForm : Form
+    {
+        private Label lblStatus;
+
+        [DllImport("user32.dll")]
+        private static extern uint SetWindowDisplayAffinity(IntPtr hWnd, uint dwAffinity);
+        private const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
+
+        protected override CreateParams CreateParams
         {
-            using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule)
+            get
             {
-                return SetWindowsHookEx(WH_MOUSE_LL, proc, GetModuleHandle(curModule.ModuleName), 0);
+                CreateParams cp = base.CreateParams;
+                cp.ExStyle |= 0x80000; // WS_EX_LAYERED
+                cp.ExStyle |= 0x20;    // WS_EX_TRANSPARENT (click-through)
+                cp.ExStyle |= 0x80;    // WS_EX_TOOLWINDOW (hide from Alt+Tab)
+                return cp;
             }
         }
 
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        protected override bool ShowWithoutActivation
         {
-            if (nCode >= 0 && wParam == (IntPtr)WM_LBUTTONDOWN)
-            {
-                bool ctrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-                if (ctrlPressed)
-                {
-                    if (isObsActive)
-                    {
-                        isZoomed = !isZoomed;
-                        this.Invoke(new Action(UpdateOverlay));
-                    }
-                }
-            }
-            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+            get { return true; } // Do not steal focus from OBS/games
         }
 
-        private void UpdateOverlay()
+        public OverlayForm()
         {
-            lblStatus.Visible = (isZoomed && isAlertEnabled && isObsActive);
+            this.FormBorderStyle = FormBorderStyle.None;
+            this.TopMost = true;
+            this.StartPosition = FormStartPosition.Manual;
+            this.ShowInTaskbar = false;
+
+            int badgeWidth = 120;
+            int badgeHeight = 24;
+            this.Size = new Size(badgeWidth, badgeHeight);
+
+            Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;
+            int posX = (workingArea.Width - badgeWidth) / 2 + workingArea.Left;
+            int posY = workingArea.Bottom - badgeHeight - 37;
+            this.Location = new Point(posX, posY);
+
+            lblStatus = new Label();
+            lblStatus.Text = "🔍 ZOOM ACTIVE";
+            lblStatus.Font = new Font("Segoe UI", 9.0f, FontStyle.Bold);
+            lblStatus.ForeColor = Color.White;
+            lblStatus.BackColor = Color.FromArgb(220, 20, 40);
+            lblStatus.AutoSize = false;
+            lblStatus.TextAlign = ContentAlignment.MiddleCenter;
+            lblStatus.Dock = DockStyle.Fill;
+
+            this.Controls.Add(lblStatus);
         }
 
-        protected override void OnFormClosing(FormClosingEventArgs e)
+        protected override void OnHandleCreated(EventArgs e)
         {
-            if (_hookID != IntPtr.Zero)
+            base.OnHandleCreated(e);
+            try
             {
-                UnhookWindowsHookEx(_hookID);
+                // Ensures the overlay badge is completely invisible in OBS recordings & streams!
+                SetWindowDisplayAffinity(this.Handle, WDA_EXCLUDEFROMCAPTURE);
             }
-            if (processCheckTimer != null)
-            {
-                processCheckTimer.Stop();
-                processCheckTimer.Dispose();
-            }
-            trayIcon.Visible = false;
-            base.OnFormClosing(e);
+            catch { }
         }
     }
 }
