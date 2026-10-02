@@ -85,11 +85,12 @@ namespace FocusLensOSD
         private bool reqWin = false;
         private string triggerType = "mouse"; // or "hotkey"
         private string mouseButton = "left";
+        private double zoomFactor = 2.0;
 
         public FocusLensAppContext()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            configPath = Path.Combine(appData, @"obs-studio\plugin_config\zoominator\zoominator.json");
+            configPath = Path.Combine(appData, @"obs-studio\plugin_config\FocusLens\FocusLens.json");
 
             LoadZoominatorConfig();
 
@@ -100,7 +101,7 @@ namespace FocusLensOSD
             }
             catch { }
 
-            overlayForm = new OverlayForm();
+            overlayForm = new OverlayForm(zoomFactor);
             overlayForm.Hide();
 
             trayIcon = new NotifyIcon();
@@ -168,7 +169,12 @@ namespace FocusLensOSD
                     reqCtrl = json.Contains("\"mod_ctrl\":true") || json.Contains("\"mod_ctrl\": true");
                     reqAlt = json.Contains("\"mod_alt\":true") || json.Contains("\"mod_alt\": true");
                     reqShift = json.Contains("\"mod_shift\":true") || json.Contains("\"mod_shift\": true");
+                    
                     reqWin = json.Contains("\"mod_win\":true") || json.Contains("\"mod_win\": true");
+                    
+                    var matchFactor = Regex.Match(json, @"""zoom_factor""\s*:\s*([0-9.]+)");
+                    if (matchFactor.Success) double.TryParse(matchFactor.Groups[1].Value, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out zoomFactor);
+
                 }
             }
             catch { }
@@ -342,7 +348,7 @@ namespace FocusLensOSD
             get { return true; } // Do not steal focus from OBS/games
         }
 
-        public OverlayForm()
+        public OverlayForm(double zoomLvl)
         {
             this.FormBorderStyle = FormBorderStyle.None;
             this.TopMost = true;
@@ -362,7 +368,7 @@ namespace FocusLensOSD
             this.Location = new Point(posX, posY);
 
             lblStatus = new Label();
-            lblStatus.Text = "🔍 ZOOM ACTIVE";
+            lblStatus.Text = "🔍 ZOOM: " + zoomLvl.ToString() + "X";
             lblStatus.Font = new Font("Segoe UI", 9.0f, FontStyle.Bold);
             lblStatus.ForeColor = Color.White;
             lblStatus.BackColor = Color.FromArgb(220, 20, 40);
@@ -376,11 +382,6 @@ namespace FocusLensOSD
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            try
-            {
-                SetWindowDisplayAffinity(this.Handle, WDA_EXCLUDEFROMCAPTURE);
-            }
-            catch { }
         }
     }
 }
