@@ -58,7 +58,7 @@ FocusLens enables dynamic magnification directly inside OBS Studio. It features 
 
 ## Installation
 
-1. Go to the [Releases](https://github.com/saifulislammz/zoominator-2.0.6-windows-x64/releases) page.
+1. Go to the [Releases](https://github.com/saifulislammz/FocusLensInstaller/releases) page.
 2. Download `FocusLensInstaller.exe`.
 3. Run the installer as Administrator. It will automatically detect your OBS Studio installation path, install the plugin binaries, and register the companion utility.
 4. Launch OBS Studio.
@@ -102,14 +102,14 @@ To compile the installer and companion app manually:
 
 ```powershell
 # Clone the repository
-git clone https://github.com/saifulislammz/zoominator-2.0.6-windows-x64.git
-cd zoominator-2.0.6-windows-x64
+git clone https://github.com/saifulislammz/FocusLensInstaller.git
+cd FocusLensInstaller
 
 # Compile companion OSD service
 C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:winexe /out:FocusLensOSD.exe /reference:System.Windows.Forms.dll /reference:System.Drawing.dll src/FocusLensOSD.cs
 
 # Compile installer
-C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:exe /out:FocusLensInstaller.exe src/FocusLensInstaller.cs
+C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe /target:exe /win32manifest:src/app.manifest /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /out:FocusLensInstaller.exe src/FocusLensInstaller.cs
 ```
 
 ---
