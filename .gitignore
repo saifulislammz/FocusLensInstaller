@@ -1,0 +1,21 @@
+# Build outputs
+*.obj
+*.exe
+!FocusLensInstaller.exe
+*.pdb
+*.ilk
+*.log
+*.tmp
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+
+# OS generated
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
