@@ -4,6 +4,7 @@ using System.Security.Principal;
 using System.Diagnostics;
 using System.Threading;
 using Microsoft.Win32;
+using System.Windows.Forms;
 
 [assembly: System.Reflection.AssemblyTitle("FocusLens All-In-One Installer")]
 [assembly: System.Reflection.AssemblyDescription("Packaged & Customized by Saiful Islam - saifulislam.net")]
@@ -52,10 +53,9 @@ namespace FocusLensInstaller {
                 if (Directory.Exists(defaultPath)) {
                     obsPath = defaultPath;
                 } else {
-                    Console.WriteLine("\n[ERROR] OBS Studio installation was not found.");
-                    Console.WriteLine("Please make sure OBS Studio (64-bit) is installed.");
-                    Console.WriteLine("\nPress any key to exit...");
-                    Console.ReadKey();
+                    string errorMsg = "OBS Studio (64-bit) installation was not found at C:\\Program Files\\obs-studio.\n\nPlease make sure OBS Studio is installed before running this installer.";
+                    Console.WriteLine("\n[ERROR] " + errorMsg);
+                    MessageBox.Show(errorMsg, "FocusLens Installer", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
             }
@@ -139,9 +139,20 @@ namespace FocusLensInstaller {
                 Console.WriteLine("   - When you zoom out: Alert immediately disappears!");
                 Console.WriteLine("4. Right-click the red tray icon for 'Test Alert (5s Preview)'.");
                 Console.WriteLine("5. The alert badge is completely hidden from recordings/streams.");
+
+                MessageBox.Show(
+                    "FocusLens for OBS Studio has been successfully installed!\n\n" +
+                    "1. Open OBS Studio.\n" +
+                    "2. Go to Tools -> FocusLens...\n" +
+                    "3. The stealth zoom alert system is running in your Windows system tray.",
+                    "FocusLens Installation Complete",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
             } catch (Exception ex) {
                 Console.WriteLine("\n[ERROR] An error occurred during installation:");
                 Console.WriteLine(ex.Message);
+                MessageBox.Show("An error occurred during installation:\n\n" + ex.Message, "FocusLens Installer Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             
             Console.WriteLine("\nPress any key to exit...");
