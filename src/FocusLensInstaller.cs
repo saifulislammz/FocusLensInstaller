@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Security.Principal;
 using System.Diagnostics;
@@ -161,3 +161,4 @@ namespace FocusLensInstaller {
         }
     }
 }
+

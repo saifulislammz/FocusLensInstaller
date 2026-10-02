@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using System.Text.RegularExpressions;
 
 [assembly: System.Reflection.AssemblyTitle("FocusLens OSD Alert System")]
 [assembly: System.Reflection.AssemblyDescription("On-Screen Zoom & Focus Indicator for OBS Studio")]
@@ -36,25 +37,62 @@ namespace FocusLensOSD
         private OverlayForm overlayForm;
         private NotifyIcon trayIcon;
         private MenuItem mnuAlertEnabled;
-        private System.Windows.Forms.Timer pollTimer;
-        private FileSystemWatcher fileWatcher;
+        private System.Windows.Forms.Timer processCheckTimer;
         private System.Windows.Forms.Timer testPreviewTimer;
 
         private string configPath;
-        private string configDir;
 
         private bool isObsActive = false;
         private bool isZoomed = false;
         private bool isAlertEnabled = true;
+        private DateTime lastToggleTime = DateTime.MinValue;
+
+        // Hook setup
+        private const int WH_MOUSE_LL = 14;
+        private const int WM_LBUTTONDOWN = 0x0201;
+        private const int WH_KEYBOARD_LL = 13;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_SYSKEYDOWN = 0x0104;
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelProc lpfn, IntPtr hMod, uint dwThreadId);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
+
+        [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+        private static extern IntPtr GetModuleHandle(string lpModuleName);
+
+        [DllImport("user32.dll")]
+        private static extern short GetAsyncKeyState(int vKey);
+
+        private const int VK_CONTROL = 0x11;
+        private const int VK_SHIFT = 0x10;
+        private const int VK_MENU = 0x12; // ALT
+
+        private delegate IntPtr LowLevelProc(int nCode, IntPtr wParam, IntPtr lParam);
+        private LowLevelProc _proc;
+        private IntPtr _hookID = IntPtr.Zero;
+
+        // Config state
+        private bool reqCtrl = true;
+        private bool reqAlt = false;
+        private bool reqShift = false;
+        private bool reqWin = false;
+        private string triggerType = "mouse"; // or "hotkey"
+        private string mouseButton = "left";
 
         public FocusLensAppContext()
         {
-            // Resolve zoominator.json config path
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            configDir = Path.Combine(appData, @"obs-studio\plugin_config\zoominator");
-            configPath = Path.Combine(configDir, "zoominator.json");
+            configPath = Path.Combine(appData, @"obs-studio\plugin_config\zoominator\zoominator.json");
 
-            // Read user preferences
+            LoadZoominatorConfig();
+
             try
             {
                 object val = Registry.GetValue(@"HKEY_CURRENT_USER\Software\FocusLensOSD", "AlertEnabled", 1);
@@ -62,13 +100,11 @@ namespace FocusLensOSD
             }
             catch { }
 
-            // Create Overlay Form (starts 100% hidden by default)
             overlayForm = new OverlayForm();
             overlayForm.Hide();
 
-            // Create System Tray Icon
             trayIcon = new NotifyIcon();
-            trayIcon.Text = "FocusLens Alert System (By Saiful Islam - saifulislam.net)";
+            trayIcon.Text = "FocusLens Alert System (By Saiful Islam)";
             try
             {
                 Bitmap bmp = new Bitmap(16, 16);
@@ -104,99 +140,95 @@ namespace FocusLensOSD
             trayMenu.MenuItems.Add("Exit", OnExit);
             trayIcon.ContextMenu = trayMenu;
 
-            // Check if OBS is running right now
             isObsActive = IsObsRunning();
             trayIcon.Visible = isObsActive;
 
-            // Setup FileSystemWatcher for instant 0ms state changes
-            SetupFileWatcher();
+            processCheckTimer = new System.Windows.Forms.Timer();
+            processCheckTimer.Interval = 2000;
+            processCheckTimer.Tick += (s, e) => CheckObsProcess();
+            processCheckTimer.Start();
 
-            // High frequency polling timer (50ms) to ensure 100% reliability
-            pollTimer = new System.Windows.Forms.Timer();
-            pollTimer.Interval = 50;
-            pollTimer.Tick += (s, e) => CheckState();
-            pollTimer.Start();
-
-            // Run initial check
-            CheckState();
+            _proc = HookCallback;
+            _hookID = SetHook(_proc);
         }
 
-        private void SetupFileWatcher()
-        {
-            try
-            {
-                if (Directory.Exists(configDir))
-                {
-                    fileWatcher = new FileSystemWatcher(configDir, "zoominator.json");
-                    fileWatcher.NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.CreationTime;
-                    fileWatcher.Changed += (s, e) => CheckState();
-                    fileWatcher.Created += (s, e) => CheckState();
-                    fileWatcher.EnableRaisingEvents = true;
-                }
-            }
-            catch { }
-        }
-
-        private void CheckState()
-        {
-            bool obsRunning = IsObsRunning();
-
-            if (obsRunning != isObsActive)
-            {
-                isObsActive = obsRunning;
-                trayIcon.Visible = isObsActive;
-
-                if (isObsActive && fileWatcher == null)
-                {
-                    SetupFileWatcher();
-                }
-            }
-
-            if (!isObsActive)
-            {
-                if (isZoomed)
-                {
-                    isZoomed = false;
-                    SetAlertVisible(false);
-                }
-                return;
-            }
-
-            // If test preview is running, do not override
-            if (testPreviewTimer != null && testPreviewTimer.Enabled)
-            {
-                return;
-            }
-
-            // Real OBS zoom state from zoominator.json (recovery_active: true/false)
-            bool zoomedInObs = ReadZoomActiveFromConfig();
-            if (zoomedInObs != isZoomed)
-            {
-                isZoomed = zoomedInObs;
-                SetAlertVisible(isZoomed && isAlertEnabled && isObsActive);
-            }
-        }
-
-        private bool ReadZoomActiveFromConfig()
+        private void LoadZoominatorConfig()
         {
             try
             {
                 if (File.Exists(configPath))
                 {
-                    using (var fs = new FileStream(configPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
-                    using (var reader = new StreamReader(fs))
+                    string json = File.ReadAllText(configPath);
+                    var matchType = Regex.Match(json, @"""trigger_type""\s*:\s*""(.*?)""");
+                    if (matchType.Success) triggerType = matchType.Groups[1].Value;
+
+                    var matchBtn = Regex.Match(json, @"""mouse_button""\s*:\s*""(.*?)""");
+                    if (matchBtn.Success) mouseButton = matchBtn.Groups[1].Value;
+
+                    reqCtrl = json.Contains("\"mod_ctrl\":true") || json.Contains("\"mod_ctrl\": true");
+                    reqAlt = json.Contains("\"mod_alt\":true") || json.Contains("\"mod_alt\": true");
+                    reqShift = json.Contains("\"mod_shift\":true") || json.Contains("\"mod_shift\": true");
+                    reqWin = json.Contains("\"mod_win\":true") || json.Contains("\"mod_win\": true");
+                }
+            }
+            catch { }
+        }
+
+        private IntPtr SetHook(LowLevelProc proc)
+        {
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.MainModule)
+            {
+                int hookType = triggerType == "mouse" ? WH_MOUSE_LL : WH_KEYBOARD_LL;
+                return SetWindowsHookEx(hookType, proc, GetModuleHandle(curModule.ModuleName), 0);
+            }
+        }
+
+        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0)
+            {
+                bool isTriggered = false;
+
+                if (triggerType == "mouse" && wParam == (IntPtr)WM_LBUTTONDOWN && mouseButton == "left")
+                {
+                    isTriggered = true;
+                }
+                // Extend for keyboard or other mouse buttons if needed, but defaults are left click.
+
+                if (isTriggered)
+                {
+                    bool ctrlPressed = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+                    bool altPressed = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
+                    bool shiftPressed = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+
+                    if ((ctrlPressed == reqCtrl) && (altPressed == reqAlt) && (shiftPressed == reqShift))
                     {
-                        string text = reader.ReadToEnd();
-                        var match = System.Text.RegularExpressions.Regex.Match(text, @"""recovery_active""\s*:\s*(true|false)");
-                        if (match.Success)
+                        if (isObsActive && (DateTime.Now - lastToggleTime).TotalMilliseconds > 400) // 400ms debounce
                         {
-                            return match.Groups[1].Value.Equals("true", StringComparison.OrdinalIgnoreCase);
+                            lastToggleTime = DateTime.Now;
+                            isZoomed = !isZoomed;
+                            SetAlertVisible(isZoomed && isAlertEnabled);
                         }
                     }
                 }
             }
-            catch { }
-            return false;
+            return CallNextHookEx(_hookID, nCode, wParam, lParam);
+        }
+
+        private void CheckObsProcess()
+        {
+            bool obsRunning = IsObsRunning();
+            if (obsRunning != isObsActive)
+            {
+                isObsActive = obsRunning;
+                trayIcon.Visible = isObsActive;
+                if (!isObsActive && isZoomed)
+                {
+                    isZoomed = false;
+                    SetAlertVisible(false);
+                }
+            }
         }
 
         private void SetAlertVisible(bool visible)
@@ -209,17 +241,11 @@ namespace FocusLensOSD
 
             if (visible)
             {
-                if (!overlayForm.Visible)
-                {
-                    overlayForm.Show();
-                }
+                if (!overlayForm.Visible) overlayForm.Show();
             }
             else
             {
-                if (overlayForm.Visible)
-                {
-                    overlayForm.Hide();
-                }
+                if (overlayForm.Visible) overlayForm.Hide();
             }
         }
 
@@ -254,7 +280,7 @@ namespace FocusLensOSD
                 testPreviewTimer.Tick += (s, ev) =>
                 {
                     testPreviewTimer.Stop();
-                    CheckState();
+                    SetAlertVisible(isZoomed && isAlertEnabled && isObsActive);
                 };
             }
             testPreviewTimer.Stop();
@@ -266,19 +292,19 @@ namespace FocusLensOSD
             if (testPreviewTimer != null) testPreviewTimer.Stop();
             isZoomed = false;
             SetAlertVisible(false);
-            CheckState();
+            LoadZoominatorConfig(); // Reload config in case they changed it
         }
 
         private void OnExit(object sender, EventArgs e)
         {
-            if (pollTimer != null)
+            if (_hookID != IntPtr.Zero)
             {
-                pollTimer.Stop();
-                pollTimer.Dispose();
+                UnhookWindowsHookEx(_hookID);
             }
-            if (fileWatcher != null)
+            if (processCheckTimer != null)
             {
-                fileWatcher.Dispose();
+                processCheckTimer.Stop();
+                processCheckTimer.Dispose();
             }
             if (testPreviewTimer != null)
             {
@@ -323,6 +349,9 @@ namespace FocusLensOSD
             this.StartPosition = FormStartPosition.Manual;
             this.ShowInTaskbar = false;
 
+            this.BackColor = Color.Magenta;
+            this.TransparencyKey = Color.Magenta;
+
             int badgeWidth = 120;
             int badgeHeight = 24;
             this.Size = new Size(badgeWidth, badgeHeight);
@@ -349,7 +378,6 @@ namespace FocusLensOSD
             base.OnHandleCreated(e);
             try
             {
-                // Ensures the overlay badge is completely invisible in OBS recordings & streams!
                 SetWindowDisplayAffinity(this.Handle, WDA_EXCLUDEFROMCAPTURE);
             }
             catch { }
